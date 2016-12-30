@@ -2,16 +2,19 @@
 下载网址:http://pkgs.fedoraproject.org/repo/pkgs/sqlite/sqlite-2.8.6.tar.gz/md5/3047e24370d7e49d7bfd9728addf76cf/sqlite-2.8.6.tar.gz
 
 > 改建项目
-```
+
 把整个src拷贝过来,放在本项目的根路径下面
+
 把tool下面的lemon.c跟lempar.c 也拷贝过来来
 
 运行gcc -o lemon lemon.c来生成lemon可运行程序
+
 再运行./lemon parse.y来生成parse.c跟parse.h文件
 
 运行./configure 然后make,最后得到config.h跟opencodes.c跟opencodec.h还有 sqlite.h
+
 然后统统拷贝过来。
-```
+
 
 
 > 用IDEA跑起来
@@ -70,11 +73,11 @@ parse.c 跟 parse.h的代码 是使用了LEMON程序根据parse.y生成的。
 
 
 简单的运行测试:
-sqlite>>
+sqlite>
 create table film(title, length, year, starring);
-sqlite>>
+sqlite>
 insert into film values ('Silence of the Lambs, The', 118, 1991, 'Jodie Foster');
-sqlite>>
+sqlite>
 select * from film;
 
 
