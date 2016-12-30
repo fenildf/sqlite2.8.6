@@ -1,0 +1,866 @@
+1.1          (drh      29-May-00): /*
+1.30         (drh      16-Sep-01): ** 2001 September 15
+1.1          (drh      29-May-00): **
+1.30         (drh      16-Sep-01): ** The author disclaims copyright to this source code.  In place of
+1.30         (drh      16-Sep-01): ** a legal notice, here is a blessing:
+1.1          (drh      29-May-00): **
+1.30         (drh      16-Sep-01): **    May you do good and not evil.
+1.30         (drh      16-Sep-01): **    May you find forgiveness for yourself and forgive others.
+1.30         (drh      16-Sep-01): **    May you share freely, never taking more than you give.
+1.1          (drh      29-May-00): **
+1.1          (drh      29-May-00): *************************************************************************
+1.1          (drh      29-May-00): ** This file contains SQLite's grammar for SQL.  Process this file
+1.1          (drh      29-May-00): ** using the lemon parser generator to generate C code that runs
+1.1          (drh      29-May-00): ** the parser.  Lemon will also generate a header file containing
+1.1          (drh      29-May-00): ** numeric codes for all of the tokens.
+1.1          (drh      29-May-00): **
+1.99         (drh      16-Jul-03): ** @(#) $Id: parse.y,v 1.98 2003/05/17 19:04:04 drh Exp $
+1.1          (drh      29-May-00): */
+1.1          (drh      29-May-00): %token_prefix TK_
+1.1          (drh      29-May-00): %token_type {Token}
+1.29         (drh      14-Sep-01): %default_type {Token}
+1.1          (drh      29-May-00): %extra_argument {Parse *pParse}
+1.1          (drh      29-May-00): %syntax_error {
+1.89         (drh      28-Jan-03):   if( pParse->zErrMsg==0 ){
+1.89         (drh      28-Jan-03):     if( TOKEN.z[0] ){
+1.89         (drh      28-Jan-03):       sqliteSetNString(&pParse->zErrMsg, 
+1.89         (drh      28-Jan-03):           "near \"", -1, TOKEN.z, TOKEN.n, "\": syntax error", -1, 0);
+1.89         (drh      28-Jan-03):     }else{
+1.89         (drh      28-Jan-03):       sqliteSetString(&pParse->zErrMsg, "incomplete SQL statement", 0);
+1.89         (drh      28-Jan-03):     }
+1.89         (drh      28-Jan-03):   }
+1.89         (drh      28-Jan-03):   pParse->nErr++;
+1.1          (drh      29-May-00): }
+1.1          (drh      29-May-00): %name sqliteParser
+1.1          (drh      29-May-00): %include {
+1.1          (drh      29-May-00): #include "sqliteInt.h"
+1.1          (drh      29-May-00): #include "parse.h"
+1.38         (drh      06-Nov-01): 
+1.38         (drh      06-Nov-01): /*
+1.68         (drh      24-May-02): ** An instance of this structure holds information about the
+1.68         (drh      24-May-02): ** LIMIT clause of a SELECT statement.
+1.38         (drh      06-Nov-01): */
+1.68         (drh      24-May-02): struct LimitVal {
+1.68         (drh      24-May-02):   int limit;    /* The LIMIT value.  -1 if there is no limit */
+1.68         (drh      24-May-02):   int offset;   /* The OFFSET.  0 if there is none */
+1.68         (drh      24-May-02): };
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): /*
+1.68         (drh      24-May-02): ** An instance of the following structure describes the event of a
+1.68         (drh      24-May-02): ** TRIGGER.  "a" is the event type, one of TK_UPDATE, TK_INSERT,
+1.68         (drh      24-May-02): ** TK_DELETE, or TK_INSTEAD.  If the event is of the form
+1.68         (drh      24-May-02): **
+1.68         (drh      24-May-02): **      UPDATE ON (a,b,c)
+1.68         (drh      24-May-02): **
+1.68         (drh      24-May-02): ** Then the "b" IdList records the list "a,b,c".
+1.64         (danielk1 15-May-02): */
+1.68         (drh      24-May-02): struct TrigEvent { int a; IdList * b; };
+1.86         (drh      07-Jan-03): 
+1.86         (drh      07-Jan-03): } // end %include
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): // These are extra tokens used by the lexer but never seen by the
+1.1          (drh      29-May-00): // parser.  We put them in a rule so that the parser generator will
+1.22         (drh      19-Jun-00): // add them to the parse.h output file.
+1.1          (drh      29-May-00): //
+1.27         (drh      04-Apr-01): %nonassoc END_OF_FILE ILLEGAL SPACE UNCLOSED_STRING COMMENT FUNCTION
+1.27         (drh      04-Apr-01):           COLUMN AGG_FUNCTION.
+1.27         (drh      04-Apr-01): 
+1.27         (drh      04-Apr-01): // Input is zero or more commands.
+1.27         (drh      04-Apr-01): input ::= cmdlist.
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): // A list of commands is zero or more commands
+1.1          (drh      29-May-00): //
+1.1          (drh      29-May-00): cmdlist ::= ecmd.
+1.57         (drh      13-Mar-02): cmdlist ::= cmdlist ecmd.
+1.90         (drh      29-Jan-03): ecmd ::= explain cmdx SEMI.
+1.57         (drh      13-Mar-02): ecmd ::= SEMI.
+1.90         (drh      29-Jan-03): cmdx ::= cmd.           { sqliteExec(pParse); }
+1.75         (drh      25-Jun-02): explain ::= EXPLAIN.    { sqliteBeginParse(pParse, 1); }
+1.75         (drh      25-Jun-02): explain ::= .           { sqliteBeginParse(pParse, 0); }
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): ///////////////////// Begin and end transactions. ////////////////////////////
+1.27         (drh      04-Apr-01): //
+1.46         (drh      02-Feb-02): 
+1.47         (drh      03-Feb-02): cmd ::= BEGIN trans_opt onconf(R).  {sqliteBeginTransaction(pParse,R);}
+1.27         (drh      04-Apr-01): trans_opt ::= .
+1.27         (drh      04-Apr-01): trans_opt ::= TRANSACTION.
+1.76         (drh      01-Jul-02): trans_opt ::= TRANSACTION nm.
+1.27         (drh      04-Apr-01): cmd ::= COMMIT trans_opt.      {sqliteCommitTransaction(pParse);}
+1.27         (drh      04-Apr-01): cmd ::= END trans_opt.         {sqliteCommitTransaction(pParse);}
+1.27         (drh      04-Apr-01): cmd ::= ROLLBACK trans_opt.    {sqliteRollbackTransaction(pParse);}
+1.27         (drh      04-Apr-01): 
+1.34         (drh      06-Oct-01): ///////////////////// The CREATE TABLE statement ////////////////////////////
+1.1          (drh      29-May-00): //
+1.1          (drh      29-May-00): cmd ::= create_table create_table_args.
+1.76         (drh      01-Jul-02): create_table ::= CREATE(X) temp(T) TABLE nm(Y). {
+1.87         (drh      13-Jan-03):    sqliteStartTable(pParse,&X,&Y,T,0);
+1.51         (drh      18-Feb-02): }
+1.35         (drh      08-Oct-01): %type temp {int}
+1.93         (drh      27-Mar-03): temp(A) ::= TEMP.  {A = 1;}
+1.93         (drh      27-Mar-03): temp(A) ::= .      {A = 0;}
+1.51         (drh      18-Feb-02): create_table_args ::= LP columnlist conslist_opt RP(X). {
+1.51         (drh      18-Feb-02):   sqliteEndTable(pParse,&X,0);
+1.51         (drh      18-Feb-02): }
+1.51         (drh      18-Feb-02): create_table_args ::= AS select(S). {
+1.51         (drh      18-Feb-02):   sqliteEndTable(pParse,0,S);
+1.51         (drh      18-Feb-02):   sqliteSelectDelete(S);
+1.51         (drh      18-Feb-02): }
+1.1          (drh      29-May-00): columnlist ::= columnlist COMMA column.
+1.1          (drh      29-May-00): columnlist ::= column.
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): // About the only information used for a column is the name of the
+1.1          (drh      29-May-00): // column.  The type is always just "text".  But the code will accept
+1.1          (drh      29-May-00): // an elaborate typename.  Perhaps someday we'll do something with it.
+1.1          (drh      29-May-00): //
+1.1          (drh      29-May-00): column ::= columnid type carglist. 
+1.76         (drh      01-Jul-02): columnid ::= nm(X).                {sqliteAddColumn(pParse,&X);}
+1.27         (drh      04-Apr-01): 
+1.27         (drh      04-Apr-01): // An IDENTIFIER can be a generic identifier, or one of several
+1.27         (drh      04-Apr-01): // keywords.  Any non-standard keyword can also be an identifier.
+1.27         (drh      04-Apr-01): //
+1.2          (drh      30-May-00): %type id {Token}
+1.27         (drh      04-Apr-01): id(A) ::= ID(X).         {A = X;}
+1.71         (drh      06-Jun-02): 
+1.72         (drh      06-Jun-02): // The following directive causes tokens ABORT, AFTER, ASC, etc. to
+1.72         (drh      06-Jun-02): // fallback to ID if they will not parse as their original value.
+1.72         (drh      06-Jun-02): // This obviates the need for the "id" nonterminal.
+1.72         (drh      06-Jun-02): //
+1.71         (drh      06-Jun-02): %fallback ID 
+1.92         (drh      20-Mar-03):   ABORT AFTER ASC ATTACH BEFORE BEGIN CASCADE CLUSTER CONFLICT
+1.92         (drh      20-Mar-03):   COPY DATABASE DEFERRED DELIMITERS DESC DETACH EACH END EXPLAIN FAIL FOR
+1.76         (drh      01-Jul-02):   IGNORE IMMEDIATE INITIALLY INSTEAD MATCH KEY
+1.76         (drh      01-Jul-02):   OF OFFSET PRAGMA RAISE REPLACE RESTRICT ROW STATEMENT
+1.71         (drh      06-Jun-02):   TEMP TRIGGER VACUUM VIEW.
+1.27         (drh      04-Apr-01): 
+1.27         (drh      04-Apr-01): // And "ids" is an identifer-or-string.
+1.27         (drh      04-Apr-01): //
+1.27         (drh      04-Apr-01): %type ids {Token}
+1.76         (drh      01-Jul-02): ids(A) ::= ID(X).        {A = X;}
+1.27         (drh      04-Apr-01): ids(A) ::= STRING(X).    {A = X;}
+1.27         (drh      04-Apr-01): 
+1.76         (drh      01-Jul-02): // The name of a column or table can be any of the following:
+1.76         (drh      01-Jul-02): //
+1.76         (drh      01-Jul-02): %type nm {Token}
+1.76         (drh      01-Jul-02): nm(A) ::= ID(X).         {A = X;}
+1.76         (drh      01-Jul-02): nm(A) ::= STRING(X).     {A = X;}
+1.76         (drh      01-Jul-02): nm(A) ::= JOIN_KW(X).    {A = X;}
+1.76         (drh      01-Jul-02): 
+1.34         (drh      06-Oct-01): type ::= .
+1.34         (drh      06-Oct-01): type ::= typename(X).                    {sqliteAddColumnType(pParse,&X,&X);}
+1.34         (drh      06-Oct-01): type ::= typename(X) LP signed RP(Y).    {sqliteAddColumnType(pParse,&X,&Y);}
+1.34         (drh      06-Oct-01): type ::= typename(X) LP signed COMMA signed RP(Y).
+1.34         (drh      06-Oct-01):                                          {sqliteAddColumnType(pParse,&X,&Y);}
+1.34         (drh      06-Oct-01): %type typename {Token}
+1.34         (drh      06-Oct-01): typename(A) ::= ids(X).           {A = X;}
+1.34         (drh      06-Oct-01): typename(A) ::= typename(X) ids.  {A = X;}
+1.99         (drh      16-Jul-03): %type signed {int}
+1.99         (drh      16-Jul-03): signed(A) ::= INTEGER(X).         { A = atoi(X.z); }
+1.99         (drh      16-Jul-03): signed(A) ::= PLUS INTEGER(X).    { A = atoi(X.z); }
+1.99         (drh      16-Jul-03): signed(A) ::= MINUS INTEGER(X).   { A = -atoi(X.z); }
+1.1          (drh      29-May-00): carglist ::= carglist carg.
+1.1          (drh      29-May-00): carglist ::= .
+1.76         (drh      01-Jul-02): carg ::= CONSTRAINT nm ccons.
+1.1          (drh      29-May-00): carg ::= ccons.
+1.7          (drh      03-Jun-00): carg ::= DEFAULT STRING(X).          {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT ID(X).              {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT INTEGER(X).         {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT PLUS INTEGER(X).    {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT MINUS INTEGER(X).   {sqliteAddDefaultValue(pParse,&X,1);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT FLOAT(X).           {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT PLUS FLOAT(X).      {sqliteAddDefaultValue(pParse,&X,0);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT MINUS FLOAT(X).     {sqliteAddDefaultValue(pParse,&X,1);}
+1.7          (drh      03-Jun-00): carg ::= DEFAULT NULL. 
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): // In addition to the type name, we also care about the primary key and
+1.34         (drh      06-Oct-01): // UNIQUE constraints.
+1.1          (drh      29-May-00): //
+1.80         (drh      11-Aug-02): ccons ::= NULL onconf.
+1.43         (drh      29-Jan-02): ccons ::= NOT NULL onconf(R).               {sqliteAddNotNull(pParse, R);}
+1.43         (drh      29-Jan-02): ccons ::= PRIMARY KEY sortorder onconf(R).  {sqliteAddPrimaryKey(pParse,0,R);}
+1.93         (drh      27-Mar-03): ccons ::= UNIQUE onconf(R).           {sqliteCreateIndex(pParse,0,0,0,R,0,0,0);}
+1.43         (drh      29-Jan-02): ccons ::= CHECK LP expr RP onconf.
+1.83         (drh      31-Aug-02): ccons ::= REFERENCES nm(T) idxlist_opt(TA) refargs(R).
+1.83         (drh      31-Aug-02):                                 {sqliteCreateForeignKey(pParse,0,&T,TA,R);}
+1.83         (drh      31-Aug-02): ccons ::= defer_subclause(D).   {sqliteDeferForeignKey(pParse,D);}
+1.74         (drh      17-Jun-02): ccons ::= COLLATE id(C).  {
+1.88         (drh      18-Jan-03):    sqliteAddCollateType(pParse, sqliteCollateType(C.z, C.n));
+1.74         (drh      17-Jun-02): }
+1.70         (drh      02-Jun-02): 
+1.83         (drh      31-Aug-02): // The next group of rules parses the arguments to a REFERENCES clause
+1.83         (drh      31-Aug-02): // that determine if the referential integrity checking is deferred or
+1.83         (drh      31-Aug-02): // or immediate and which determine what action to take if a ref-integ
+1.83         (drh      31-Aug-02): // check fails.
+1.83         (drh      31-Aug-02): //
+1.83         (drh      31-Aug-02): %type refargs {int}
+1.83         (drh      31-Aug-02): refargs(A) ::= .                     { A = OE_Restrict * 0x010101; }
+1.83         (drh      31-Aug-02): refargs(A) ::= refargs(X) refarg(Y). { A = (X & Y.mask) | Y.value; }
+1.83         (drh      31-Aug-02): %type refarg {struct {int value; int mask;}}
+1.83         (drh      31-Aug-02): refarg(A) ::= MATCH nm.              { A.value = 0;     A.mask = 0x000000; }
+1.83         (drh      31-Aug-02): refarg(A) ::= ON DELETE refact(X).   { A.value = X;     A.mask = 0x0000ff; }
+1.83         (drh      31-Aug-02): refarg(A) ::= ON UPDATE refact(X).   { A.value = X<<8;  A.mask = 0x00ff00; }
+1.83         (drh      31-Aug-02): refarg(A) ::= ON INSERT refact(X).   { A.value = X<<16; A.mask = 0xff0000; }
+1.83         (drh      31-Aug-02): %type refact {int}
+1.83         (drh      31-Aug-02): refact(A) ::= SET NULL.              { A = OE_SetNull; }
+1.83         (drh      31-Aug-02): refact(A) ::= SET DEFAULT.           { A = OE_SetDflt; }
+1.83         (drh      31-Aug-02): refact(A) ::= CASCADE.               { A = OE_Cascade; }
+1.83         (drh      31-Aug-02): refact(A) ::= RESTRICT.              { A = OE_Restrict; }
+1.83         (drh      31-Aug-02): %type defer_subclause {int}
+1.83         (drh      31-Aug-02): defer_subclause(A) ::= NOT DEFERRABLE init_deferred_pred_opt(X).  {A = X;}
+1.83         (drh      31-Aug-02): defer_subclause(A) ::= DEFERRABLE init_deferred_pred_opt(X).      {A = X;}
+1.83         (drh      31-Aug-02): %type init_deferred_pred_opt {int}
+1.83         (drh      31-Aug-02): init_deferred_pred_opt(A) ::= .                       {A = 0;}
+1.83         (drh      31-Aug-02): init_deferred_pred_opt(A) ::= INITIALLY DEFERRED.     {A = 1;}
+1.83         (drh      31-Aug-02): init_deferred_pred_opt(A) ::= INITIALLY IMMEDIATE.    {A = 0;}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): // For the time being, the only constraint we care about is the primary
+1.34         (drh      06-Oct-01): // key and UNIQUE.  Both create indices.
+1.1          (drh      29-May-00): //
+1.1          (drh      29-May-00): conslist_opt ::= .
+1.1          (drh      29-May-00): conslist_opt ::= COMMA conslist.
+1.1          (drh      29-May-00): conslist ::= conslist COMMA tcons.
+1.26         (drh      04-Jan-01): conslist ::= conslist tcons.
+1.1          (drh      29-May-00): conslist ::= tcons.
+1.76         (drh      01-Jul-02): tcons ::= CONSTRAINT nm.
+1.43         (drh      29-Jan-02): tcons ::= PRIMARY KEY LP idxlist(X) RP onconf(R).
+1.43         (drh      29-Jan-02):                                              {sqliteAddPrimaryKey(pParse,X,R);}
+1.43         (drh      29-Jan-02): tcons ::= UNIQUE LP idxlist(X) RP onconf(R).
+1.93         (drh      27-Mar-03):                                      {sqliteCreateIndex(pParse,0,0,X,R,0,0,0);}
+1.43         (drh      29-Jan-02): tcons ::= CHECK expr onconf.
+1.83         (drh      31-Aug-02): tcons ::= FOREIGN KEY LP idxlist(FA) RP
+1.83         (drh      31-Aug-02):           REFERENCES nm(T) idxlist_opt(TA) refargs(R) defer_subclause_opt(D). {
+1.83         (drh      31-Aug-02):     sqliteCreateForeignKey(pParse, FA, &T, TA, R);
+1.83         (drh      31-Aug-02):     sqliteDeferForeignKey(pParse, D);
+1.83         (drh      31-Aug-02): }
+1.83         (drh      31-Aug-02): %type defer_subclause_opt {int}
+1.83         (drh      31-Aug-02): defer_subclause_opt(A) ::= .                    {A = 0;}
+1.83         (drh      31-Aug-02): defer_subclause_opt(A) ::= defer_subclause(X).  {A = X;}
+1.43         (drh      29-Jan-02): 
+1.43         (drh      29-Jan-02): // The following is a non-standard extension that allows us to declare the
+1.43         (drh      29-Jan-02): // default behavior when there is a constraint conflict.
+1.43         (drh      29-Jan-02): //
+1.43         (drh      29-Jan-02): %type onconf {int}
+1.45         (drh      31-Jan-02): %type orconf {int}
+1.45         (drh      31-Jan-02): %type resolvetype {int}
+1.45         (drh      31-Jan-02): onconf(A) ::= .                              { A = OE_Default; }
+1.45         (drh      31-Jan-02): onconf(A) ::= ON CONFLICT resolvetype(X).    { A = X; }
+1.45         (drh      31-Jan-02): orconf(A) ::= .                              { A = OE_Default; }
+1.45         (drh      31-Jan-02): orconf(A) ::= OR resolvetype(X).             { A = X; }
+1.45         (drh      31-Jan-02): resolvetype(A) ::= ROLLBACK.                 { A = OE_Rollback; }
+1.45         (drh      31-Jan-02): resolvetype(A) ::= ABORT.                    { A = OE_Abort; }
+1.45         (drh      31-Jan-02): resolvetype(A) ::= FAIL.                     { A = OE_Fail; }
+1.45         (drh      31-Jan-02): resolvetype(A) ::= IGNORE.                   { A = OE_Ignore; }
+1.45         (drh      31-Jan-02): resolvetype(A) ::= REPLACE.                  { A = OE_Replace; }
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): ////////////////////////// The DROP TABLE /////////////////////////////////////
+1.1          (drh      29-May-00): //
+1.76         (drh      01-Jul-02): cmd ::= DROP TABLE nm(X).          {sqliteDropTable(pParse,&X,0);}
+1.53         (drh      23-Feb-02): 
+1.53         (drh      23-Feb-02): ///////////////////// The CREATE VIEW statement /////////////////////////////
+1.53         (drh      23-Feb-02): //
+1.78         (drh      08-Jul-02): cmd ::= CREATE(X) temp(T) VIEW nm(Y) AS select(S). {
+1.78         (drh      08-Jul-02):   sqliteCreateView(pParse, &X, &Y, S, T);
+1.53         (drh      23-Feb-02): }
+1.76         (drh      01-Jul-02): cmd ::= DROP VIEW nm(X). {
+1.55         (drh      03-Mar-02):   sqliteDropTable(pParse, &X, 1);
+1.53         (drh      23-Feb-02): }
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): //////////////////////// The SELECT statement /////////////////////////////////
+1.1          (drh      29-May-00): //
+1.9          (drh      05-Jun-00): cmd ::= select(X).  {
+1.54         (drh      02-Mar-02):   sqliteSelect(pParse, X, SRT_Callback, 0, 0, 0, 0);
+1.9          (drh      05-Jun-00):   sqliteSelectDelete(X);
+1.9          (drh      05-Jun-00): }
+1.9          (drh      05-Jun-00): 
+1.9          (drh      05-Jun-00): %type select {Select*}
+1.9          (drh      05-Jun-00): %destructor select {sqliteSelectDelete($$);}
+1.14         (drh      06-Jun-00): %type oneselect {Select*}
+1.14         (drh      06-Jun-00): %destructor oneselect {sqliteSelectDelete($$);}
+1.9          (drh      05-Jun-00): 
+1.14         (drh      06-Jun-00): select(A) ::= oneselect(X).                      {A = X;}
+1.52         (drh      18-Feb-02): select(A) ::= select(X) multiselect_op(Y) oneselect(Z).  {
+1.28         (drh      11-Apr-01):   if( Z ){
+1.14         (drh      06-Jun-00):     Z->op = Y;
+1.14         (drh      06-Jun-00):     Z->pPrior = X;
+1.28         (drh      11-Apr-01):   }
+1.28         (drh      11-Apr-01):   A = Z;
+1.14         (drh      06-Jun-00): }
+1.52         (drh      18-Feb-02): %type multiselect_op {int}
+1.52         (drh      18-Feb-02): multiselect_op(A) ::= UNION.      {A = TK_UNION;}
+1.52         (drh      18-Feb-02): multiselect_op(A) ::= UNION ALL.  {A = TK_ALL;}
+1.52         (drh      18-Feb-02): multiselect_op(A) ::= INTERSECT.  {A = TK_INTERSECT;}
+1.52         (drh      18-Feb-02): multiselect_op(A) ::= EXCEPT.     {A = TK_EXCEPT;}
+1.14         (drh      06-Jun-00): oneselect(A) ::= SELECT distinct(D) selcollist(W) from(X) where_opt(Y)
+1.38         (drh      06-Nov-01):                  groupby_opt(P) having_opt(Q) orderby_opt(Z) limit_opt(L). {
+1.68         (drh      24-May-02):   A = sqliteSelectNew(W,X,Y,P,Q,Z,D,L.limit,L.offset);
+1.9          (drh      05-Jun-00): }
+1.6          (drh      31-May-00): 
+1.9          (drh      05-Jun-00): // The "distinct" nonterminal is true (1) if the DISTINCT keyword is
+1.9          (drh      05-Jun-00): // present and false (0) if it is not.
+1.9          (drh      05-Jun-00): //
+1.6          (drh      31-May-00): %type distinct {int}
+1.6          (drh      31-May-00): distinct(A) ::= DISTINCT.   {A = 1;}
+1.11         (drh      06-Jun-00): distinct(A) ::= ALL.        {A = 0;}
+1.6          (drh      31-May-00): distinct(A) ::= .           {A = 0;}
+1.1          (drh      29-May-00): 
+1.9          (drh      05-Jun-00): // selcollist is a list of expressions that are to become the return
+1.39         (drh      16-Dec-01): // values of the SELECT statement.  The "*" in statements like
+1.39         (drh      16-Dec-01): // "SELECT * FROM ..." is encoded as a special expression with an
+1.39         (drh      16-Dec-01): // opcode of TK_ALL.
+1.9          (drh      05-Jun-00): //
+1.1          (drh      29-May-00): %type selcollist {ExprList*}
+1.1          (drh      29-May-00): %destructor selcollist {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): %type sclp {ExprList*}
+1.1          (drh      29-May-00): %destructor sclp {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): sclp(A) ::= selcollist(X) COMMA.             {A = X;}
+1.1          (drh      29-May-00): sclp(A) ::= .                                {A = 0;}
+1.69         (drh      24-May-02): selcollist(A) ::= sclp(P) expr(X) as(Y).     {
+1.69         (drh      24-May-02):    A = sqliteExprListAppend(P,X,Y.n?&Y:0);
+1.69         (drh      24-May-02): }
+1.39         (drh      16-Dec-01): selcollist(A) ::= sclp(P) STAR. {
+1.39         (drh      16-Dec-01):   A = sqliteExprListAppend(P, sqliteExpr(TK_ALL, 0, 0, 0), 0);
+1.60         (drh      04-Apr-02): }
+1.76         (drh      01-Jul-02): selcollist(A) ::= sclp(P) nm(X) DOT STAR. {
+1.60         (drh      04-Apr-02):   Expr *pRight = sqliteExpr(TK_ALL, 0, 0, 0);
+1.60         (drh      04-Apr-02):   Expr *pLeft = sqliteExpr(TK_ID, 0, 0, &X);
+1.60         (drh      04-Apr-02):   A = sqliteExprListAppend(P, sqliteExpr(TK_DOT, pLeft, pRight, 0), 0);
+1.39         (drh      16-Dec-01): }
+1.69         (drh      24-May-02): 
+1.69         (drh      24-May-02): // An option "AS <id>" phrase that can follow one of the expressions that
+1.69         (drh      24-May-02): // define the result set, or one of the tables in the FROM clause.
+1.69         (drh      24-May-02): //
+1.69         (drh      24-May-02): %type as {Token}
+1.76         (drh      01-Jul-02): as(X) ::= AS nm(Y).    { X = Y; }
+1.76         (drh      01-Jul-02): as(X) ::= ids(Y).      { X = Y; }
+1.76         (drh      01-Jul-02): as(X) ::= .            { X.n = 0; }
+1.9          (drh      05-Jun-00): 
+1.1          (drh      29-May-00): 
+1.68         (drh      24-May-02): %type seltablist {SrcList*}
+1.68         (drh      24-May-02): %destructor seltablist {sqliteSrcListDelete($$);}
+1.68         (drh      24-May-02): %type stl_prefix {SrcList*}
+1.68         (drh      24-May-02): %destructor stl_prefix {sqliteSrcListDelete($$);}
+1.68         (drh      24-May-02): %type from {SrcList*}
+1.68         (drh      24-May-02): %destructor from {sqliteSrcListDelete($$);}
+1.1          (drh      29-May-00): 
+1.69         (drh      24-May-02): // A complete FROM clause.
+1.69         (drh      24-May-02): //
+1.61         (drh      06-Apr-02): from(A) ::= .                                 {A = sqliteMalloc(sizeof(*A));}
+1.1          (drh      29-May-00): from(A) ::= FROM seltablist(X).               {A = X;}
+1.69         (drh      24-May-02): 
+1.69         (drh      24-May-02): // "seltablist" is a "Select Table List" - the content of the FROM clause
+1.69         (drh      24-May-02): // in a SELECT statement.  "stl_prefix" is a prefix of this list.
+1.69         (drh      24-May-02): //
+1.69         (drh      24-May-02): stl_prefix(A) ::= seltablist(X) joinop(Y).    {
+1.69         (drh      24-May-02):    A = X;
+1.69         (drh      24-May-02):    if( A && A->nSrc>0 ) A->a[A->nSrc-1].jointype = Y;
+1.69         (drh      24-May-02): }
+1.1          (drh      29-May-00): stl_prefix(A) ::= .                           {A = 0;}
+1.92         (drh      20-Mar-03): seltablist(A) ::= stl_prefix(X) nm(Y) dbnm(D) as(Z) on_opt(N) using_opt(U). {
+1.92         (drh      20-Mar-03):   A = sqliteSrcListAppend(X,&Y,&D);
+1.69         (drh      24-May-02):   if( Z.n ) sqliteSrcListAddAlias(A,&Z);
+1.69         (drh      24-May-02):   if( N ){
+1.69         (drh      24-May-02):     if( A && A->nSrc>1 ){ A->a[A->nSrc-2].pOn = N; }
+1.69         (drh      24-May-02):     else { sqliteExprDelete(N); }
+1.69         (drh      24-May-02):   }
+1.69         (drh      24-May-02):   if( U ){
+1.69         (drh      24-May-02):     if( A && A->nSrc>1 ){ A->a[A->nSrc-2].pUsing = U; }
+1.69         (drh      24-May-02):     else { sqliteIdListDelete(U); }
+1.69         (drh      24-May-02):   }
+1.49         (drh      18-Feb-02): }
+1.69         (drh      24-May-02): seltablist(A) ::= stl_prefix(X) LP select(S) RP as(Z) on_opt(N) using_opt(U). {
+1.92         (drh      20-Mar-03):   A = sqliteSrcListAppend(X,0,0);
+1.68         (drh      24-May-02):   A->a[A->nSrc-1].pSelect = S;
+1.69         (drh      24-May-02):   if( Z.n ) sqliteSrcListAddAlias(A,&Z);
+1.69         (drh      24-May-02):   if( N ){
+1.69         (drh      24-May-02):     if( A && A->nSrc>1 ){ A->a[A->nSrc-2].pOn = N; }
+1.69         (drh      24-May-02):     else { sqliteExprDelete(N); }
+1.69         (drh      24-May-02):   }
+1.69         (drh      24-May-02):   if( U ){
+1.69         (drh      24-May-02):     if( A && A->nSrc>1 ){ A->a[A->nSrc-2].pUsing = U; }
+1.69         (drh      24-May-02):     else { sqliteIdListDelete(U); }
+1.63         (drh      08-May-02):   }
+1.27         (drh      04-Apr-01): }
+1.69         (drh      24-May-02): 
+1.92         (drh      20-Mar-03): %type dbnm {Token}
+1.92         (drh      20-Mar-03): dbnm(A) ::= .          {A.z=0; A.n=0;}
+1.92         (drh      20-Mar-03): dbnm(A) ::= DOT nm(X). {A = X;}
+1.92         (drh      20-Mar-03): 
+1.69         (drh      24-May-02): %type joinop {int}
+1.69         (drh      24-May-02): %type joinop2 {int}
+1.69         (drh      24-May-02): joinop(X) ::= COMMA.                   { X = JT_INNER; }
+1.69         (drh      24-May-02): joinop(X) ::= JOIN.                    { X = JT_INNER; }
+1.76         (drh      01-Jul-02): joinop(X) ::= JOIN_KW(A) JOIN.         { X = sqliteJoinType(pParse,&A,0,0); }
+1.76         (drh      01-Jul-02): joinop(X) ::= JOIN_KW(A) nm(B) JOIN.   { X = sqliteJoinType(pParse,&A,&B,0); }
+1.76         (drh      01-Jul-02): joinop(X) ::= JOIN_KW(A) nm(B) nm(C) JOIN.
+1.76         (drh      01-Jul-02):                                        { X = sqliteJoinType(pParse,&A,&B,&C); }
+1.69         (drh      24-May-02): 
+1.69         (drh      24-May-02): %type on_opt {Expr*}
+1.69         (drh      24-May-02): %destructor on_opt {sqliteExprDelete($$);}
+1.69         (drh      24-May-02): on_opt(N) ::= ON expr(E).   {N = E;}
+1.69         (drh      24-May-02): on_opt(N) ::= .             {N = 0;}
+1.69         (drh      24-May-02): 
+1.69         (drh      24-May-02): %type using_opt {IdList*}
+1.69         (drh      24-May-02): %destructor using_opt {sqliteIdListDelete($$);}
+1.69         (drh      24-May-02): using_opt(U) ::= USING LP idxlist(L) RP.  {U = L;}
+1.69         (drh      24-May-02): using_opt(U) ::= .                        {U = 0;}
+1.69         (drh      24-May-02): 
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type orderby_opt {ExprList*}
+1.1          (drh      29-May-00): %destructor orderby_opt {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): %type sortlist {ExprList*}
+1.1          (drh      29-May-00): %destructor sortlist {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): %type sortitem {Expr*}
+1.1          (drh      29-May-00): %destructor sortitem {sqliteExprDelete($$);}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): orderby_opt(A) ::= .                          {A = 0;}
+1.1          (drh      29-May-00): orderby_opt(A) ::= ORDER BY sortlist(X).      {A = X;}
+1.74         (drh      17-Jun-02): sortlist(A) ::= sortlist(X) COMMA sortitem(Y) collate(C) sortorder(Z). {
+1.9          (drh      05-Jun-00):   A = sqliteExprListAppend(X,Y,0);
+1.74         (drh      17-Jun-02):   if( A ) A->a[A->nExpr-1].sortOrder = C+Z;
+1.9          (drh      05-Jun-00): }
+1.77         (drh      05-Jul-02): sortlist(A) ::= sortitem(Y) collate(C) sortorder(Z). {
+1.9          (drh      05-Jun-00):   A = sqliteExprListAppend(0,Y,0);
+1.77         (drh      05-Jul-02):   if( A ) A->a[0].sortOrder = C+Z;
+1.9          (drh      05-Jun-00): }
+1.5          (drh      31-May-00): sortitem(A) ::= expr(X).   {A = X;}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type sortorder {int}
+1.74         (drh      17-Jun-02): %type collate {int}
+1.1          (drh      29-May-00): 
+1.74         (drh      17-Jun-02): sortorder(A) ::= ASC.           {A = SQLITE_SO_ASC;}
+1.74         (drh      17-Jun-02): sortorder(A) ::= DESC.          {A = SQLITE_SO_DESC;}
+1.74         (drh      17-Jun-02): sortorder(A) ::= .              {A = SQLITE_SO_ASC;}
+1.74         (drh      17-Jun-02): collate(C) ::= .                {C = SQLITE_SO_UNK;}
+1.88         (drh      18-Jan-03): collate(C) ::= COLLATE id(X).   {C = sqliteCollateType(X.z, X.n);}
+1.13         (drh      06-Jun-00): 
+1.13         (drh      06-Jun-00): %type groupby_opt {ExprList*}
+1.13         (drh      06-Jun-00): %destructor groupby_opt {sqliteExprListDelete($$);}
+1.22         (drh      19-Jun-00): groupby_opt(A) ::= .                      {A = 0;}
+1.13         (drh      06-Jun-00): groupby_opt(A) ::= GROUP BY exprlist(X).  {A = X;}
+1.13         (drh      06-Jun-00): 
+1.13         (drh      06-Jun-00): %type having_opt {Expr*}
+1.13         (drh      06-Jun-00): %destructor having_opt {sqliteExprDelete($$);}
+1.22         (drh      19-Jun-00): having_opt(A) ::= .                {A = 0;}
+1.13         (drh      06-Jun-00): having_opt(A) ::= HAVING expr(X).  {A = X;}
+1.38         (drh      06-Nov-01): 
+1.68         (drh      24-May-02): %type limit_opt {struct LimitVal}
+1.99         (drh      16-Jul-03): limit_opt(A) ::= .                     {A.limit = -1; A.offset = 0;}
+1.99         (drh      16-Jul-03): limit_opt(A) ::= LIMIT signed(X).      {A.limit = X; A.offset = 0;}
+1.99         (drh      16-Jul-03): limit_opt(A) ::= LIMIT signed(X) OFFSET signed(Y). 
+1.99         (drh      16-Jul-03):                                        {A.limit = X; A.offset = Y;}
+1.99         (drh      16-Jul-03): limit_opt(A) ::= LIMIT signed(X) COMMA signed(Y). 
+1.99         (drh      16-Jul-03):                                        {A.limit = Y; A.offset = X;}
+1.14         (drh      06-Jun-00): 
+1.34         (drh      06-Oct-01): /////////////////////////// The DELETE statement /////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.92         (drh      20-Mar-03): cmd ::= DELETE FROM nm(X) dbnm(D) where_opt(Y). {
+1.92         (drh      20-Mar-03):    sqliteDeleteFrom(pParse, sqliteSrcListAppend(0,&X,&D), Y);
+1.92         (drh      20-Mar-03): }
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type where_opt {Expr*}
+1.1          (drh      29-May-00): %destructor where_opt {sqliteExprDelete($$);}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): where_opt(A) ::= .                    {A = 0;}
+1.1          (drh      29-May-00): where_opt(A) ::= WHERE expr(X).       {A = X;}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type setlist {ExprList*}
+1.1          (drh      29-May-00): %destructor setlist {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): ////////////////////////// The UPDATE command ////////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.92         (drh      20-Mar-03): cmd ::= UPDATE orconf(R) nm(X) dbnm(D) SET setlist(Y) where_opt(Z).
+1.92         (drh      20-Mar-03):     {sqliteUpdate(pParse,sqliteSrcListAppend(0,&X,&D),Y,Z,R);}
+1.1          (drh      29-May-00): 
+1.76         (drh      01-Jul-02): setlist(A) ::= setlist(Z) COMMA nm(X) EQ expr(Y).
+1.1          (drh      29-May-00):     {A = sqliteExprListAppend(Z,Y,&X);}
+1.76         (drh      01-Jul-02): setlist(A) ::= nm(X) EQ expr(Y).   {A = sqliteExprListAppend(0,Y,&X);}
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): ////////////////////////// The INSERT command /////////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.92         (drh      20-Mar-03): cmd ::= insert_cmd(R) INTO nm(X) dbnm(D) inscollist_opt(F) 
+1.92         (drh      20-Mar-03):         VALUES LP itemlist(Y) RP.
+1.92         (drh      20-Mar-03):             {sqliteInsert(pParse, sqliteSrcListAppend(0,&X,&D), Y, 0, F, R);}
+1.92         (drh      20-Mar-03): cmd ::= insert_cmd(R) INTO nm(X) dbnm(D) inscollist_opt(F) select(S).
+1.92         (drh      20-Mar-03):             {sqliteInsert(pParse, sqliteSrcListAppend(0,&X,&D), 0, S, F, R);}
+1.46         (drh      02-Feb-02): 
+1.46         (drh      02-Feb-02): %type insert_cmd {int}
+1.46         (drh      02-Feb-02): insert_cmd(A) ::= INSERT orconf(R).   {A = R;}
+1.46         (drh      02-Feb-02): insert_cmd(A) ::= REPLACE.            {A = OE_Replace;}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type itemlist {ExprList*}
+1.1          (drh      29-May-00): %destructor itemlist {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): 
+1.50         (drh      18-Feb-02): itemlist(A) ::= itemlist(X) COMMA expr(Y).  {A = sqliteExprListAppend(X,Y,0);}
+1.50         (drh      18-Feb-02): itemlist(A) ::= expr(X).                    {A = sqliteExprListAppend(0,X,0);}
+1.1          (drh      29-May-00): 
+1.23         (drh      21-Jun-00): %type inscollist_opt {IdList*}
+1.23         (drh      21-Jun-00): %destructor inscollist_opt {sqliteIdListDelete($$);}
+1.23         (drh      21-Jun-00): %type inscollist {IdList*}
+1.23         (drh      21-Jun-00): %destructor inscollist {sqliteIdListDelete($$);}
+1.23         (drh      21-Jun-00): 
+1.27         (drh      04-Apr-01): inscollist_opt(A) ::= .                       {A = 0;}
+1.27         (drh      04-Apr-01): inscollist_opt(A) ::= LP inscollist(X) RP.    {A = X;}
+1.76         (drh      01-Jul-02): inscollist(A) ::= inscollist(X) COMMA nm(Y).  {A = sqliteIdListAppend(X,&Y);}
+1.76         (drh      01-Jul-02): inscollist(A) ::= nm(Y).                      {A = sqliteIdListAppend(0,&Y);}
+1.1          (drh      29-May-00): 
+1.34         (drh      06-Oct-01): /////////////////////////// Expression Processing /////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.1          (drh      29-May-00): %left OR.
+1.1          (drh      29-May-00): %left AND.
+1.8          (drh      03-Jun-00): %right NOT.
+1.11         (drh      06-Jun-00): %left EQ NE ISNULL NOTNULL IS LIKE GLOB BETWEEN IN.
+1.1          (drh      29-May-00): %left GT GE LT LE.
+1.36         (drh      12-Oct-01): %left BITAND BITOR LSHIFT RSHIFT.
+1.1          (drh      29-May-00): %left PLUS MINUS.
+1.37         (drh      13-Oct-01): %left STAR SLASH REM.
+1.21         (drh      16-Jun-00): %left CONCAT.
+1.82         (drh      24-Aug-02): %right UMINUS UPLUS BITNOT.
+1.85         (drh      27-Oct-02): %right ORACLE_OUTER_JOIN.
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type expr {Expr*}
+1.1          (drh      29-May-00): %destructor expr {sqliteExprDelete($$);}
+1.1          (drh      29-May-00): 
+1.84         (drh      22-Oct-02): expr(A) ::= LP(B) expr(X) RP(E). {A = X; sqliteExprSpan(A,&B,&E); }
+1.24         (drh      29-Jul-00): expr(A) ::= NULL(X).             {A = sqliteExpr(TK_NULL, 0, 0, &X);}
+1.76         (drh      01-Jul-02): expr(A) ::= ID(X).               {A = sqliteExpr(TK_ID, 0, 0, &X);}
+1.76         (drh      01-Jul-02): expr(A) ::= JOIN_KW(X).          {A = sqliteExpr(TK_ID, 0, 0, &X);}
+1.76         (drh      01-Jul-02): expr(A) ::= nm(X) DOT nm(Y). {
+1.24         (drh      29-Jul-00):   Expr *temp1 = sqliteExpr(TK_ID, 0, 0, &X);
+1.24         (drh      29-Jul-00):   Expr *temp2 = sqliteExpr(TK_ID, 0, 0, &Y);
+1.24         (drh      29-Jul-00):   A = sqliteExpr(TK_DOT, temp1, temp2, 0);
+1.24         (drh      29-Jul-00): }
+1.93         (drh      27-Mar-03): expr(A) ::= nm(X) DOT nm(Y) DOT nm(Z). {
+1.93         (drh      27-Mar-03):   Expr *temp1 = sqliteExpr(TK_ID, 0, 0, &X);
+1.93         (drh      27-Mar-03):   Expr *temp2 = sqliteExpr(TK_ID, 0, 0, &Y);
+1.93         (drh      27-Mar-03):   Expr *temp3 = sqliteExpr(TK_ID, 0, 0, &Z);
+1.93         (drh      27-Mar-03):   Expr *temp4 = sqliteExpr(TK_DOT, temp2, temp3, 0);
+1.93         (drh      27-Mar-03):   A = sqliteExpr(TK_DOT, temp1, temp4, 0);
+1.93         (drh      27-Mar-03): }
+1.85         (drh      27-Oct-02): expr(A) ::= expr(B) ORACLE_OUTER_JOIN. 
+1.85         (drh      27-Oct-02):                              {A = B; ExprSetProperty(A,EP_Oracle8Join);}
+1.1          (drh      29-May-00): expr(A) ::= INTEGER(X).      {A = sqliteExpr(TK_INTEGER, 0, 0, &X);}
+1.1          (drh      29-May-00): expr(A) ::= FLOAT(X).        {A = sqliteExpr(TK_FLOAT, 0, 0, &X);}
+1.1          (drh      29-May-00): expr(A) ::= STRING(X).       {A = sqliteExpr(TK_STRING, 0, 0, &X);}
+1.24         (drh      29-Jul-00): expr(A) ::= ID(X) LP exprlist(Y) RP(E). {
+1.24         (drh      29-Jul-00):   A = sqliteExprFunction(Y, &X);
+1.24         (drh      29-Jul-00):   sqliteExprSpan(A,&X,&E);
+1.24         (drh      29-Jul-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= ID(X) LP STAR RP(E). {
+1.24         (drh      29-Jul-00):   A = sqliteExprFunction(0, &X);
+1.24         (drh      29-Jul-00):   sqliteExprSpan(A,&X,&E);
+1.24         (drh      29-Jul-00): }
+1.1          (drh      29-May-00): expr(A) ::= expr(X) AND expr(Y).   {A = sqliteExpr(TK_AND, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) OR expr(Y).    {A = sqliteExpr(TK_OR, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) LT expr(Y).    {A = sqliteExpr(TK_LT, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) GT expr(Y).    {A = sqliteExpr(TK_GT, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) LE expr(Y).    {A = sqliteExpr(TK_LE, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) GE expr(Y).    {A = sqliteExpr(TK_GE, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) NE expr(Y).    {A = sqliteExpr(TK_NE, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) EQ expr(Y).    {A = sqliteExpr(TK_EQ, X, Y, 0);}
+1.36         (drh      12-Oct-01): expr(A) ::= expr(X) BITAND expr(Y). {A = sqliteExpr(TK_BITAND, X, Y, 0);}
+1.36         (drh      12-Oct-01): expr(A) ::= expr(X) BITOR expr(Y).  {A = sqliteExpr(TK_BITOR, X, Y, 0);}
+1.36         (drh      12-Oct-01): expr(A) ::= expr(X) LSHIFT expr(Y). {A = sqliteExpr(TK_LSHIFT, X, Y, 0);}
+1.36         (drh      12-Oct-01): expr(A) ::= expr(X) RSHIFT expr(Y). {A = sqliteExpr(TK_RSHIFT, X, Y, 0);}
+1.62         (drh      20-Apr-02): expr(A) ::= expr(X) likeop(OP) expr(Y).  [LIKE]  {
+1.62         (drh      20-Apr-02):   ExprList *pList = sqliteExprListAppend(0, Y, 0);
+1.62         (drh      20-Apr-02):   pList = sqliteExprListAppend(pList, X, 0);
+1.82         (drh      24-Aug-02):   A = sqliteExprFunction(pList, 0);
+1.82         (drh      24-Aug-02):   if( A ) A->op = OP;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A, &X->span, &Y->span);
+1.62         (drh      20-Apr-02): }
+1.62         (drh      20-Apr-02): expr(A) ::= expr(X) NOT likeop(OP) expr(Y). [LIKE] {
+1.62         (drh      20-Apr-02):   ExprList *pList = sqliteExprListAppend(0, Y, 0);
+1.62         (drh      20-Apr-02):   pList = sqliteExprListAppend(pList, X, 0);
+1.82         (drh      24-Aug-02):   A = sqliteExprFunction(pList, 0);
+1.82         (drh      24-Aug-02):   if( A ) A->op = OP;
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_NOT, A, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&Y->span);
+1.12         (drh      06-Jun-00): }
+1.82         (drh      24-Aug-02): %type likeop {int}
+1.82         (drh      24-Aug-02): likeop(A) ::= LIKE. {A = TK_LIKE;}
+1.82         (drh      24-Aug-02): likeop(A) ::= GLOB. {A = TK_GLOB;}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) PLUS expr(Y).  {A = sqliteExpr(TK_PLUS, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) MINUS expr(Y). {A = sqliteExpr(TK_MINUS, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) STAR expr(Y).  {A = sqliteExpr(TK_STAR, X, Y, 0);}
+1.1          (drh      29-May-00): expr(A) ::= expr(X) SLASH expr(Y). {A = sqliteExpr(TK_SLASH, X, Y, 0);}
+1.37         (drh      13-Oct-01): expr(A) ::= expr(X) REM expr(Y).   {A = sqliteExpr(TK_REM, X, Y, 0);}
+1.21         (drh      16-Jun-00): expr(A) ::= expr(X) CONCAT expr(Y). {A = sqliteExpr(TK_CONCAT, X, Y, 0);}
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) ISNULL(E). {
+1.24         (drh      29-Jul-00):   A = sqliteExpr(TK_ISNULL, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.24         (drh      29-Jul-00): }
+1.33         (drh      01-Oct-01): expr(A) ::= expr(X) IS NULL(E). {
+1.33         (drh      01-Oct-01):   A = sqliteExpr(TK_ISNULL, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.33         (drh      01-Oct-01): }
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) NOTNULL(E). {
+1.33         (drh      01-Oct-01):   A = sqliteExpr(TK_NOTNULL, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.33         (drh      01-Oct-01): }
+1.33         (drh      01-Oct-01): expr(A) ::= expr(X) NOT NULL(E). {
+1.24         (drh      29-Jul-00):   A = sqliteExpr(TK_NOTNULL, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.24         (drh      29-Jul-00): }
+1.36         (drh      12-Oct-01): expr(A) ::= expr(X) IS NOT NULL(E). {
+1.36         (drh      12-Oct-01):   A = sqliteExpr(TK_NOTNULL, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.36         (drh      12-Oct-01): }
+1.24         (drh      29-Jul-00): expr(A) ::= NOT(B) expr(X). {
+1.24         (drh      29-Jul-00):   A = sqliteExpr(TK_NOT, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&B,&X->span);
+1.36         (drh      12-Oct-01): }
+1.36         (drh      12-Oct-01): expr(A) ::= BITNOT(B) expr(X). {
+1.36         (drh      12-Oct-01):   A = sqliteExpr(TK_BITNOT, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&B,&X->span);
+1.24         (drh      29-Jul-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= MINUS(B) expr(X). [UMINUS] {
+1.24         (drh      29-Jul-00):   A = sqliteExpr(TK_UMINUS, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&B,&X->span);
+1.24         (drh      29-Jul-00): }
+1.82         (drh      24-Aug-02): expr(A) ::= PLUS(B) expr(X). [UPLUS] {
+1.82         (drh      24-Aug-02):   A = sqliteExpr(TK_UPLUS, X, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&B,&X->span);
+1.24         (drh      29-Jul-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= LP(B) select(X) RP(E). {
+1.10         (drh      05-Jun-00):   A = sqliteExpr(TK_SELECT, 0, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pSelect = X;
+1.24         (drh      29-Jul-00):   sqliteExprSpan(A,&B,&E);
+1.10         (drh      05-Jun-00): }
+1.11         (drh      06-Jun-00): expr(A) ::= expr(W) BETWEEN expr(X) AND expr(Y). {
+1.11         (drh      06-Jun-00):   ExprList *pList = sqliteExprListAppend(0, X, 0);
+1.11         (drh      06-Jun-00):   pList = sqliteExprListAppend(pList, Y, 0);
+1.11         (drh      06-Jun-00):   A = sqliteExpr(TK_BETWEEN, W, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pList = pList;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&W->span,&Y->span);
+1.11         (drh      06-Jun-00): }
+1.12         (drh      06-Jun-00): expr(A) ::= expr(W) NOT BETWEEN expr(X) AND expr(Y). {
+1.12         (drh      06-Jun-00):   ExprList *pList = sqliteExprListAppend(0, X, 0);
+1.12         (drh      06-Jun-00):   pList = sqliteExprListAppend(pList, Y, 0);
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_BETWEEN, W, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pList = pList;
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_NOT, A, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&W->span,&Y->span);
+1.12         (drh      06-Jun-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) IN LP exprlist(Y) RP(E).  {
+1.11         (drh      06-Jun-00):   A = sqliteExpr(TK_IN, X, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pList = Y;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.11         (drh      06-Jun-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) IN LP select(Y) RP(E).  {
+1.11         (drh      06-Jun-00):   A = sqliteExpr(TK_IN, X, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pSelect = Y;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.12         (drh      06-Jun-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) NOT IN LP exprlist(Y) RP(E).  {
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_IN, X, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pList = Y;
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_NOT, A, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.12         (drh      06-Jun-00): }
+1.24         (drh      29-Jul-00): expr(A) ::= expr(X) NOT IN LP select(Y) RP(E).  {
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_IN, X, 0, 0);
+1.28         (drh      11-Apr-01):   if( A ) A->pSelect = Y;
+1.12         (drh      06-Jun-00):   A = sqliteExpr(TK_NOT, A, 0, 0);
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A,&X->span,&E);
+1.11         (drh      06-Jun-00): }
+1.11         (drh      06-Jun-00): 
+1.58         (drh      24-Mar-02): /* CASE expressions */
+1.58         (drh      24-Mar-02): expr(A) ::= CASE(C) case_operand(X) case_exprlist(Y) case_else(Z) END(E). {
+1.58         (drh      24-Mar-02):   A = sqliteExpr(TK_CASE, X, Z, 0);
+1.58         (drh      24-Mar-02):   if( A ) A->pList = Y;
+1.58         (drh      24-Mar-02):   sqliteExprSpan(A, &C, &E);
+1.58         (drh      24-Mar-02): }
+1.58         (drh      24-Mar-02): %type case_exprlist {ExprList*}
+1.58         (drh      24-Mar-02): %destructor case_exprlist {sqliteExprListDelete($$);}
+1.58         (drh      24-Mar-02): case_exprlist(A) ::= case_exprlist(X) WHEN expr(Y) THEN expr(Z). {
+1.58         (drh      24-Mar-02):   A = sqliteExprListAppend(X, Y, 0);
+1.58         (drh      24-Mar-02):   A = sqliteExprListAppend(A, Z, 0);
+1.58         (drh      24-Mar-02): }
+1.58         (drh      24-Mar-02): case_exprlist(A) ::= WHEN expr(Y) THEN expr(Z). {
+1.58         (drh      24-Mar-02):   A = sqliteExprListAppend(0, Y, 0);
+1.58         (drh      24-Mar-02):   A = sqliteExprListAppend(A, Z, 0);
+1.58         (drh      24-Mar-02): }
+1.58         (drh      24-Mar-02): %type case_else {Expr*}
+1.58         (drh      24-Mar-02): case_else(A) ::=  ELSE expr(X).         {A = X;}
+1.58         (drh      24-Mar-02): case_else(A) ::=  .                     {A = 0;} 
+1.58         (drh      24-Mar-02): %type case_operand {Expr*}
+1.58         (drh      24-Mar-02): case_operand(A) ::= expr(X).            {A = X;} 
+1.58         (drh      24-Mar-02): case_operand(A) ::= .                   {A = 0;} 
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type exprlist {ExprList*}
+1.1          (drh      29-May-00): %destructor exprlist {sqliteExprListDelete($$);}
+1.1          (drh      29-May-00): %type expritem {Expr*}
+1.1          (drh      29-May-00): %destructor expritem {sqliteExprDelete($$);}
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): exprlist(A) ::= exprlist(X) COMMA expritem(Y). 
+1.1          (drh      29-May-00):    {A = sqliteExprListAppend(X,Y,0);}
+1.1          (drh      29-May-00): exprlist(A) ::= expritem(X).            {A = sqliteExprListAppend(0,X,0);}
+1.1          (drh      29-May-00): expritem(A) ::= expr(X).                {A = X;}
+1.1          (drh      29-May-00): expritem(A) ::= .                       {A = 0;}
+1.4          (drh      31-May-00): 
+1.34         (drh      06-Oct-01): ///////////////////////////// The CREATE INDEX command ///////////////////////
+1.34         (drh      06-Oct-01): //
+1.93         (drh      27-Mar-03): cmd ::= CREATE(S) temp(T) uniqueflag(U) INDEX nm(X)
+1.93         (drh      27-Mar-03):         ON nm(Y) dbnm(D) LP idxlist(Z) RP(E) onconf(R). {
+1.93         (drh      27-Mar-03):   SrcList *pSrc = sqliteSrcListAppend(0, &Y, &D);
+1.43         (drh      29-Jan-02):   if( U!=OE_None ) U = R;
+1.43         (drh      29-Jan-02):   if( U==OE_Default) U = OE_Abort;
+1.93         (drh      27-Mar-03):   sqliteCreateIndex(pParse, &X, pSrc, Z, U, T, &S, &E);
+1.43         (drh      29-Jan-02): }
+1.31         (drh      27-Sep-01): 
+1.31         (drh      27-Sep-01): %type uniqueflag {int}
+1.43         (drh      29-Jan-02): uniqueflag(A) ::= UNIQUE.  { A = OE_Abort; }
+1.43         (drh      29-Jan-02): uniqueflag(A) ::= .        { A = OE_None; }
+1.1          (drh      29-May-00): 
+1.1          (drh      29-May-00): %type idxlist {IdList*}
+1.1          (drh      29-May-00): %destructor idxlist {sqliteIdListDelete($$);}
+1.83         (drh      31-Aug-02): %type idxlist_opt {IdList*}
+1.83         (drh      31-Aug-02): %destructor idxlist_opt {sqliteIdListDelete($$);}
+1.1          (drh      29-May-00): %type idxitem {Token}
+1.1          (drh      29-May-00): 
+1.83         (drh      31-Aug-02): idxlist_opt(A) ::= .                         {A = 0;}
+1.83         (drh      31-Aug-02): idxlist_opt(A) ::= LP idxlist(X) RP.         {A = X;}
+1.83         (drh      31-Aug-02): idxlist(A) ::= idxlist(X) COMMA idxitem(Y).  {A = sqliteIdListAppend(X,&Y);}
+1.83         (drh      31-Aug-02): idxlist(A) ::= idxitem(Y).                   {A = sqliteIdListAppend(0,&Y);}
+1.97         (drh      29-Apr-03): idxitem(A) ::= nm(X) sortorder.              {A = X;}
+1.1          (drh      29-May-00): 
+1.41         (drh      22-Dec-01): ///////////////////////////// The DROP INDEX command /////////////////////////
+1.34         (drh      06-Oct-01): //
+1.34         (drh      06-Oct-01): 
+1.93         (drh      27-Mar-03): cmd ::= DROP INDEX nm(X) dbnm(Y).   {
+1.93         (drh      27-Mar-03):   sqliteDropIndex(pParse, sqliteSrcListAppend(0,&X,&Y));
+1.93         (drh      27-Mar-03): }
+1.2          (drh      30-May-00): 
+1.34         (drh      06-Oct-01): 
+1.41         (drh      22-Dec-01): ///////////////////////////// The COPY command ///////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.93         (drh      27-Mar-03): cmd ::= COPY orconf(R) nm(X) dbnm(D) FROM nm(Y) USING DELIMITERS STRING(Z).
+1.93         (drh      27-Mar-03):     {sqliteCopy(pParse,sqliteSrcListAppend(0,&X,&D),&Y,&Z,R);}
+1.93         (drh      27-Mar-03): cmd ::= COPY orconf(R) nm(X) dbnm(D) FROM nm(Y).
+1.93         (drh      27-Mar-03):     {sqliteCopy(pParse,sqliteSrcListAppend(0,&X,&D),&Y,0,R);}
+1.3          (drh      31-May-00): 
+1.34         (drh      06-Oct-01): ///////////////////////////// The VACUUM command /////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.3          (drh      31-May-00): cmd ::= VACUUM.                {sqliteVacuum(pParse,0);}
+1.76         (drh      01-Jul-02): cmd ::= VACUUM nm(X).         {sqliteVacuum(pParse,&X);}
+1.29         (drh      14-Sep-01): 
+1.34         (drh      06-Oct-01): ///////////////////////////// The PRAGMA command /////////////////////////////
+1.34         (drh      06-Oct-01): //
+1.76         (drh      01-Jul-02): cmd ::= PRAGMA ids(X) EQ nm(Y).         {sqlitePragma(pParse,&X,&Y,0);}
+1.29         (drh      14-Sep-01): cmd ::= PRAGMA ids(X) EQ ON(Y).          {sqlitePragma(pParse,&X,&Y,0);}
+1.29         (drh      14-Sep-01): cmd ::= PRAGMA ids(X) EQ plus_num(Y).    {sqlitePragma(pParse,&X,&Y,0);}
+1.29         (drh      14-Sep-01): cmd ::= PRAGMA ids(X) EQ minus_num(Y).   {sqlitePragma(pParse,&X,&Y,1);}
+1.76         (drh      01-Jul-02): cmd ::= PRAGMA ids(X) LP nm(Y) RP.      {sqlitePragma(pParse,&X,&Y,0);}
+1.56         (drh      05-Mar-02): cmd ::= PRAGMA ids(X).                   {sqlitePragma(pParse,&X,&X,0);}
+1.29         (drh      14-Sep-01): plus_num(A) ::= plus_opt number(X).   {A = X;}
+1.29         (drh      14-Sep-01): minus_num(A) ::= MINUS number(X).     {A = X;}
+1.29         (drh      14-Sep-01): number(A) ::= INTEGER(X).  {A = X;}
+1.29         (drh      14-Sep-01): number(A) ::= FLOAT(X).    {A = X;}
+1.29         (drh      14-Sep-01): plus_opt ::= PLUS.
+1.29         (drh      14-Sep-01): plus_opt ::= .
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): //////////////////////////// The CREATE TRIGGER command /////////////////////
+1.96         (drh      21-Apr-03): 
+1.96         (drh      21-Apr-03): cmd ::= CREATE(A) trigger_decl BEGIN trigger_cmd_list(S) END(Z). {
+1.82         (drh      24-Aug-02):   Token all;
+1.82         (drh      24-Aug-02):   all.z = A.z;
+1.82         (drh      24-Aug-02):   all.n = (Z.z - A.z) + Z.n;
+1.96         (drh      21-Apr-03):   sqliteFinishTrigger(pParse, S, &all);
+1.96         (drh      21-Apr-03): }
+1.96         (drh      21-Apr-03): 
+1.96         (drh      21-Apr-03): trigger_decl ::= temp(T) TRIGGER nm(B) trigger_time(C) trigger_event(D)
+1.96         (drh      21-Apr-03):                  ON nm(E) dbnm(DB) foreach_clause(F) when_clause(G). {
+1.96         (drh      21-Apr-03):   SrcList *pTab = sqliteSrcListAppend(0, &E, &DB);
+1.96         (drh      21-Apr-03):   sqliteBeginTrigger(pParse, &B, C, D.a, D.b, pTab, F, G, T);
+1.64         (danielk1 15-May-02): }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): %type trigger_time  {int}
+1.64         (danielk1 15-May-02): trigger_time(A) ::= BEFORE.      { A = TK_BEFORE; }
+1.64         (danielk1 15-May-02): trigger_time(A) ::= AFTER.       { A = TK_AFTER;  }
+1.64         (danielk1 15-May-02): trigger_time(A) ::= INSTEAD OF.  { A = TK_INSTEAD;}
+1.64         (danielk1 15-May-02): trigger_time(A) ::= .            { A = TK_BEFORE; }
+1.64         (danielk1 15-May-02): 
+1.68         (drh      24-May-02): %type trigger_event {struct TrigEvent}
+1.68         (drh      24-May-02): %destructor trigger_event {sqliteIdListDelete($$.b);}
+1.64         (danielk1 15-May-02): trigger_event(A) ::= DELETE. { A.a = TK_DELETE; A.b = 0; }
+1.64         (danielk1 15-May-02): trigger_event(A) ::= INSERT. { A.a = TK_INSERT; A.b = 0; }
+1.64         (danielk1 15-May-02): trigger_event(A) ::= UPDATE. { A.a = TK_UPDATE; A.b = 0;}
+1.64         (danielk1 15-May-02): trigger_event(A) ::= UPDATE OF inscollist(X). {A.a = TK_UPDATE; A.b = X; }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): %type foreach_clause {int}
+1.64         (danielk1 15-May-02): foreach_clause(A) ::= .                   { A = TK_ROW; }
+1.64         (danielk1 15-May-02): foreach_clause(A) ::= FOR EACH ROW.       { A = TK_ROW; }
+1.64         (danielk1 15-May-02): foreach_clause(A) ::= FOR EACH STATEMENT. { A = TK_STATEMENT; }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): %type when_clause {Expr *}
+1.64         (danielk1 15-May-02): when_clause(A) ::= .             { A = 0; }
+1.64         (danielk1 15-May-02): when_clause(A) ::= WHEN expr(X). { A = X; }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): %type trigger_cmd_list {TriggerStep *}
+1.96         (drh      21-Apr-03): %destructor trigger_cmd_list {sqliteDeleteTriggerStep($$);}
+1.64         (danielk1 15-May-02): trigger_cmd_list(A) ::= trigger_cmd(X) SEMI trigger_cmd_list(Y). {
+1.95         (drh      17-Apr-03):   X->pNext = Y;
+1.95         (drh      17-Apr-03):   A = X;
+1.95         (drh      17-Apr-03): }
+1.64         (danielk1 15-May-02): trigger_cmd_list(A) ::= . { A = 0; }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): %type trigger_cmd {TriggerStep *}
+1.96         (drh      21-Apr-03): %destructor trigger_cmd {sqliteDeleteTriggerStep($$);}
+1.64         (danielk1 15-May-02): // UPDATE 
+1.76         (drh      01-Jul-02): trigger_cmd(A) ::= UPDATE orconf(R) nm(X) SET setlist(Y) where_opt(Z).  
+1.64         (danielk1 15-May-02):                { A = sqliteTriggerUpdateStep(&X, Y, Z, R); }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): // INSERT
+1.76         (drh      01-Jul-02): trigger_cmd(A) ::= INSERT orconf(R) INTO nm(X) inscollist_opt(F) 
+1.64         (danielk1 15-May-02):   VALUES LP itemlist(Y) RP.  
+1.64         (danielk1 15-May-02): {A = sqliteTriggerInsertStep(&X, F, Y, 0, R);}
+1.64         (danielk1 15-May-02): 
+1.76         (drh      01-Jul-02): trigger_cmd(A) ::= INSERT orconf(R) INTO nm(X) inscollist_opt(F) select(S).
+1.64         (danielk1 15-May-02):                {A = sqliteTriggerInsertStep(&X, F, 0, S, R);}
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): // DELETE
+1.76         (drh      01-Jul-02): trigger_cmd(A) ::= DELETE FROM nm(X) where_opt(Y).
+1.64         (danielk1 15-May-02):                {A = sqliteTriggerDeleteStep(&X, Y);}
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): // SELECT
+1.64         (danielk1 15-May-02): trigger_cmd(A) ::= select(X).  {A = sqliteTriggerSelectStep(X); }
+1.73         (danielk1 11-Jun-02): 
+1.73         (danielk1 11-Jun-02): // The special RAISE expression that may occur in trigger programs
+1.82         (drh      24-Aug-02): expr(A) ::= RAISE(X) LP IGNORE RP(Y).  {
+1.82         (drh      24-Aug-02):   A = sqliteExpr(TK_RAISE, 0, 0, 0); 
+1.82         (drh      24-Aug-02):   A->iColumn = OE_Ignore;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A, &X, &Y);
+1.82         (drh      24-Aug-02): }
+1.82         (drh      24-Aug-02): expr(A) ::= RAISE(X) LP ROLLBACK COMMA nm(Z) RP(Y).  {
+1.82         (drh      24-Aug-02):   A = sqliteExpr(TK_RAISE, 0, 0, &Z); 
+1.82         (drh      24-Aug-02):   A->iColumn = OE_Rollback;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A, &X, &Y);
+1.82         (drh      24-Aug-02): }
+1.82         (drh      24-Aug-02): expr(A) ::= RAISE(X) LP ABORT COMMA nm(Z) RP(Y).  {
+1.82         (drh      24-Aug-02):   A = sqliteExpr(TK_RAISE, 0, 0, &Z); 
+1.82         (drh      24-Aug-02):   A->iColumn = OE_Abort;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A, &X, &Y);
+1.82         (drh      24-Aug-02): }
+1.82         (drh      24-Aug-02): expr(A) ::= RAISE(X) LP FAIL COMMA nm(Z) RP(Y).  {
+1.82         (drh      24-Aug-02):   A = sqliteExpr(TK_RAISE, 0, 0, &Z); 
+1.82         (drh      24-Aug-02):   A->iColumn = OE_Fail;
+1.84         (drh      22-Oct-02):   sqliteExprSpan(A, &X, &Y);
+1.82         (drh      24-Aug-02): }
+1.64         (danielk1 15-May-02): 
+1.64         (danielk1 15-May-02): ////////////////////////  DROP TRIGGER statement //////////////////////////////
+1.93         (drh      27-Mar-03): cmd ::= DROP TRIGGER nm(X) dbnm(D). {
+1.98         (drh      17-May-03):   sqliteDropTrigger(pParse,sqliteSrcListAppend(0,&X,&D));
+1.64         (danielk1 15-May-02): }
+1.92         (drh      20-Mar-03): 
+1.92         (drh      20-Mar-03): //////////////////////// ATTACH DATABASE file AS name /////////////////////////
+1.94         (drh      31-Mar-03): cmd ::= ATTACH database_kw_opt ids(F) AS nm(D). {
+1.94         (drh      31-Mar-03):   sqliteAttach(pParse, &F, &D);
+1.94         (drh      31-Mar-03): }
+1.92         (drh      20-Mar-03): 
+1.92         (drh      20-Mar-03): database_kw_opt ::= DATABASE.
+1.92         (drh      20-Mar-03): database_kw_opt ::= .
+1.92         (drh      20-Mar-03): 
+1.92         (drh      20-Mar-03): //////////////////////// DETACH DATABASE name /////////////////////////////////
+1.94         (drh      31-Mar-03): cmd ::= DETACH database_kw_opt nm(D). {
+1.94         (drh      31-Mar-03):   sqliteDetach(pParse, &D);
+1.94         (drh      31-Mar-03): }
