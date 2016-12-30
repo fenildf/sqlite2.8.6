@@ -75,11 +75,13 @@ parse.c 跟 parse.h的代码 是使用了LEMON程序根据parse.y生成的。
 简单的运行测试:
 sqlite>
 create table film(title, length, year, starring);
+
 sqlite>
 insert into film values ('Silence of the Lambs, The', 118, 1991, 'Jodie Foster');
+
 sqlite>
 select * from film;
 
 
-相比较3.7的版本的代码,【14w代码量】
-sqlite2.8.6的代码量才5w不到。还是从这个sqlite2.8.6入手来学习吧。
+相比较3.7.9的版本的代码,【14w代码量】
+sqlite2.8.6的代码量才5w不到。学完LEMON还是从这个sqlite2.8.6入手来学习吧。
